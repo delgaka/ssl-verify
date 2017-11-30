@@ -82,6 +82,7 @@ lista = []
 for i in hosts:
     lista.append(i.replace("\n", ""))
 
+print "server;server_name;server_name_alt;begin;end;issuer"
 
 for server in lista:  # sys.argv[1:]:
     ctx = OpenSSL.SSL.Context(ssl.PROTOCOL_TLSv1)
@@ -97,7 +98,7 @@ for server in lista:  # sys.argv[1:]:
         x509 = cnx.get_peer_certificate()
         s.close()
     except Exception as e:
-        print "%30s: %s%s%s" % (server, color['error'], e, color['end'])
+        print "%30s: %s" % (server, e)
         continue
 
     issuer = x509.get_issuer()
@@ -130,15 +131,9 @@ for server in lista:  # sys.argv[1:]:
     end_ok = end > now
 
     # server,server_name,server_name_alt,begin.strftime("%d.%m.%Y"),end.strftime("%d.%m.%Y"),issuer_corp
-    print "server;server_name;server_name_alt;begin;end;issuer"
-    print "%s;%s%s%s;%s%s%s;%s%s%s;%s%s%s;%s" % (server,
-                                                        color[server_name_ok], server_name,
-                                                        color['end'],
-                                                        color[server_name_alt_ok],
-                                                        server_name_alt, color['end'],
-                                                        color[begin_ok],
-                                                        begin.strftime("%d.%m.%Y"),
-                                                        color['end'],
-                                                        color[end_ok], end.strftime("%d.%m.%Y"),
-                                                        color['end'],
-                                                        issuer_corp)
+    print "%s;%s;%s;%s;%s;%s" % (server,
+                                 server_name,
+                                 server_name_alt,
+                                 begin.strftime("%d.%m.%Y"),
+                                 end.strftime("%d.%m.%Y"),
+                                 issuer_corp)
