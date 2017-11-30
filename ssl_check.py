@@ -130,6 +130,7 @@ for server in lista:  # sys.argv[1:]:
     end_ok = end > now
 
     # server,server_name,server_name_alt,begin.strftime("%d.%m.%Y"),end.strftime("%d.%m.%Y"),issuer_corp
+    print "server;server_name;server_name_alt;begin;end;issuer"
     print "%s;%s%s%s;%s%s%s;%s%s%s;%s%s%s;%s" % (server,
                                                         color[server_name_ok], server_name,
                                                         color['end'],
