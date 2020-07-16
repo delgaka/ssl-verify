@@ -1,2 +1,2 @@
-# ssl_veriify
+# ssl_verify
 check SSL
