@@ -1,139 +1,114 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-# ----------------------------------------------------------------------------
-# "THE BEER-WARE LICENSE" (Revision 42):
-# <dev@robertweidlich.de> wrote this file. As long as you retain this notice you
-# can do whatever you want with this stuff. If we meet some day, and you think
-# this stuff is worth it, you can buy me a beer in return.
-# ----------------------------------------------------------------------------
-#
-
-
-import sys
+#!/usr/bin/env python3
+import socket
 import ssl
+import sys
+import json
 from datetime import datetime
 import pytz
-import OpenSSL
-import socket
-from ndg.httpsclient.subj_alt_name import SubjectAltName
-from pyasn1.codec.der import decoder as der_decoder
-import pyasn1
-
-if len(sys.argv) < 2:
-    print "Usage: %s hostname1 [hostname2] [hostname3] ..." % sys.argv[0]
-    print
-    print "Preparation:"
-    print " $ virtualenv venv"
-    print " $ . venv/bin/activate"
-    print " $ pip install pytz pyasn1 pyOpenSSL ndg-httpsclient"
+from cryptography import x509
+from cryptography.hazmat.backends import default_backend
+import pandas as pd
 
 
 def ler_arquivo(arquivo):
-    """
-    """
     try:
-        foo = open("./".join(arquivo), "r")
-        conteudo = foo.readlines()
-        foo.close()
-        return conteudo
-    except (OSError, IOError, TypeError) as e:
-        print("Arquivo inválido")
-        print("Arquivo informado: %s" % arquivo)
-        print("Erro do sistema: %s" % e)
-        return False
+        with open("./".join(arquivo), "r") as f:
+            return [linha.strip() for linha in f.readlines()]
+    except Exception as e:
+        print("Erro ao abrir arquivo:", e)
+        return []
 
 
-def get_subj_alt_name(peer_cert):
-    """
-    Copied from ndg.httpsclient.ssl_peer_verification.ServerSSLCertVerification
-    Extract subjectAltName DNS name settings from certificate extensions
-    @param peer_cert: peer certificate in SSL connection.  subjectAltName
-    settings if any will be extracted from this
-    @type peer_cert: OpenSSL.crypto.X509
-    """
-    # Search through extensions
-    dns_name = []
-    general_names = SubjectAltName()
-    for i in range(peer_cert.get_extension_count()):
-        ext = peer_cert.get_extension(i)
-        ext_name = ext.get_short_name()
-        if ext_name == "subjectAltName":
-            # PyOpenSSL returns extension data in ASN.1 encoded form
-            ext_dat = ext.get_data()
-            decoded_dat = der_decoder.decode(ext_dat, asn1Spec=general_names)
-
-            for name in decoded_dat:
-                if isinstance(name, SubjectAltName):
-                    for entry in range(len(name)):
-                        component = name.getComponentByPosition(entry)
-                        dns_name.append(str(component.getComponent()))
-    return dns_name
+def get_certificate(hostname, port=443, verify=True):
+    context = (
+        ssl.create_default_context() if verify else ssl._create_unverified_context()
+    )
+    conn = context.wrap_socket(socket.socket(socket.AF_INET), server_hostname=hostname)
+    try:
+        conn.settimeout(5)
+        conn.connect((hostname, port))
+        der_cert = conn.getpeercert(binary_form=True)
+        conn.close()
+        return der_cert
+    except Exception as e:
+        return {"hostname": hostname, "error": str(e)}
 
 
-color = {
-    False: "\033[31;1m",
-    True: "\033[32;1m",
-    'end': "\033[0m",
-    'error': "\033[33;1m",
-}
+def parse_cert(der_cert, hostname, note=None):
+    cert = x509.load_der_x509_certificate(der_cert, default_backend())
+
+    try:
+        cn = cert.subject.get_attributes_for_oid(x509.NameOID.COMMON_NAME)[0].value
+    except IndexError:
+        cn = ""
+
+    try:
+        ext = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName)
+        sans = ext.value.get_values_for_type(x509.DNSName)
+    except x509.ExtensionNotFound:
+        sans = []
+
+    begin = cert.not_valid_before_utc
+    end = cert.not_valid_after_utc
+    now = datetime.now(pytz.UTC)
+
+    try:
+        issuer = cert.issuer.get_attributes_for_oid(x509.NameOID.ORGANIZATION_NAME)[
+            0
+        ].value
+    except IndexError:
+        issuer = ""
+
+    if now < begin:
+        validity = "not yet valid"
+    elif now > end:
+        validity = "expired"
+    else:
+        validity = "valid"
+
+    return {
+        "hostname": hostname,
+        "common_name": cn,
+        "subject_alt_names": sans,
+        "valid_from": begin.isoformat(),
+        "valid_to": end.isoformat(),
+        "issuer": issuer,
+        "validity_status": validity,
+        "note": note or "",
+    }
+
+
+if len(sys.argv) < 2:
+    print("Uso: python ssl_check_json.py hosts.txt")
+    sys.exit(1)
 
 hosts = ler_arquivo(sys.argv[1:])
-lista = []
-for i in hosts:
-    lista.append(i.replace("\n", ""))
+resultados = []
 
-print "server;server_name;server_name_alt;begin;end;issuer"
-
-for server in lista:  # sys.argv[1:]:
-    ctx = OpenSSL.SSL.Context(ssl.PROTOCOL_TLSv1)
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    x509 = None
-    try:
-        s.connect((server, 443))
-        cnx = OpenSSL.SSL.Connection(ctx, s)
-        cnx.set_tlsext_host_name(server)
-        cnx.set_connect_state()
-        cnx.do_handshake()
-
-        x509 = cnx.get_peer_certificate()
-        s.close()
-    except Exception as e:
-        print "%30s: %s" % (server, e)
-        continue
-
-    issuer = x509.get_issuer()
-    issuer_corp = x509.get_issuer().organizationName
-    issuer_url = x509.get_issuer().organizationalUnitName
-    issuer_x509 = x509.get_issuer().commonName
-
-    server_name = x509.get_subject().commonName
-    server_name_ok = server_name == server
-
-    try:
-        subjectAltNames = get_subj_alt_name(x509)
-    except pyasn1.error.PyAsn1Error:
-        subjectAltNames = []
-    server_name_alt_ok = server in subjectAltNames
-    if server_name_alt_ok:
-        server_name_alt = server
-    elif len(subjectAltNames) == 0:
-        server_name_alt = None
+for host in hosts:
+    cert_bin = get_certificate(host)
+    if isinstance(cert_bin, dict) and "error" in cert_bin:
+        cert_bin_unverified = get_certificate(host, verify=False)
+        if isinstance(cert_bin_unverified, dict) and "error" in cert_bin_unverified:
+            resultados.append(cert_bin)  # mantém erro original
+        else:
+            parsed = parse_cert(
+                cert_bin_unverified,
+                host,
+                note="certificate retrieved without verification",
+            )
+            resultados.append(parsed)
     else:
-        server_name_alt = subjectAltNames[0]
+        resultados.append(parse_cert(cert_bin, host))
 
-    if len(subjectAltNames) > 1:
-        server_name_alt += " (+%i)" % (len(subjectAltNames) - 1)
+# Salvar JSON
+with open("certificados_resultado.json", "w") as f:
+    json.dump(resultados, f, indent=2)
 
-    now = datetime.now(pytz.utc)
-    begin = datetime.strptime(x509.get_notBefore(), "%Y%m%d%H%M%SZ").replace(tzinfo=pytz.UTC)
-    begin_ok = begin < now
-    end = datetime.strptime(x509.get_notAfter(), "%Y%m%d%H%M%SZ").replace(tzinfo=pytz.UTC)
-    end_ok = end > now
+# Salvar CSV
+df = pd.json_normalize(resultados)
+df.to_csv("certificados_resultado.csv", index=False)
 
-    # server,server_name,server_name_alt,begin.strftime("%d.%m.%Y"),end.strftime("%d.%m.%Y"),issuer_corp
-    print "%s;%s;%s;%s;%s;%s" % (server,
-                                 server_name,
-                                 server_name_alt,
-                                 begin.strftime("%d.%m.%Y"),
-                                 end.strftime("%d.%m.%Y"),
-                                 issuer_corp)
+print("Resultados salvos em:")
+print(" - certificados_resultado.json")
+print(" - certificados_resultado.csv")
